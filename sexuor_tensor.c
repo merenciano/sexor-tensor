@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <math.h>
 #include <immintrin.h>
 
 typedef float data_t;
@@ -84,9 +85,14 @@ static void ST_CreateNetwork(ST_Network *this, size_t input_count, size_t *layer
 	this->neurons.bias = malloc(neuron_count * sizeof(data_t));
 	this->neurons.bgrad = malloc(neuron_count * sizeof(grad_t));
 
-	for (int i = 0; i < neuron_count; ++i)
+	for (int i = 0; i < total_wcount; ++i)
 	{
 		*((data_t*)this->neurons.data_pool + i) = Normalize(rand(), RAND_MAX);
+	}
+
+	for (int i = 0; i < neuron_count; ++i)
+	{
+		this->neurons.bias[i] = Normalize(rand(), RAND_MAX);
 	}
 
 	data_t *walloc = this->neurons.data_pool;
@@ -112,14 +118,38 @@ static void ST_CreateNetwork(ST_Network *this, size_t input_count, size_t *layer
 	}
 }
 
-static void ST_ForwardPass(ST_Network *this, data_t *input)
+static data_t *ST_ForwardPass(ST_Network *this, data_t *input)
 {
+	data_t *outs;
 	for (int l = 0; l< this->layer_count; ++l)
 	{
+		outs = malloc(this->layers[l].size * sizeof(data_t));
 		for (int n = 0; n < this->layers[l].size; ++n)
 		{
 			Neuron neu = this->layers[l].first_neuron + n;
-			float out = ST_ProcessNeuron(this->neurons.weights[neu], input, this->neurons.bias[neu], this->layers[l].wcount);
+			outs[n] = ST_ProcessNeuron(this->neurons.weights[neu], input, this->neurons.bias[neu], this->layers[l].wcount);
 		}
+		free(input);
+		input = outs;
 	}
+
+	return outs;
+}
+
+static data_t Loss(data_t *res, data_t *pred, data_t *g, int count)
+{
+	data_t loss = 0.0f;
+	for (int i = 0; i < count; ++i)
+	{
+		loss += pow(res[i] - pred[i], 2.0); // nonsense using powf and let data_t be redefined
+		g[i] = (-pred[i]) * 2.0f;
+	}
+	return loss;
+}
+
+static data_t BackwardLoss(data_t loss)
+{
+(exp * pow(v[c[x << 1]], exp - 1.0)) * g[x];
+	data_t a;
+	return 2 * pow(a)
 }
