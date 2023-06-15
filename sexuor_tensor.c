@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
 #include <immintrin.h>
 
 typedef float data_t;
@@ -23,7 +24,7 @@ typedef struct
 typedef struct
 {
 	Neuron first_neuron;
-	size_t wcount; // For each neuron.
+	size_t nwcount; // For each neuron.
 	size_t size;
 } ST_Layer;
 
@@ -74,10 +75,10 @@ static void ST_CreateNetwork(ST_Network *this, size_t input_count, size_t *layer
 	for (int i = 1; i < layer_count - 1; ++i)
 	{
 		total_wcount += layer_sizes[i] * layer_sizes[i - 1];
-		this->layers[i].wcount = layer_sizes[i - 1];
+		this->layers[i].nwcount = layer_sizes[i - 1];
 	}
 	total_wcount += input_count * layer_sizes[0];
-	this->layers[0].wcount = input_count;
+	this->layers[0].nwcount = input_count;
 
 	this->neurons.weights = (data_t**)malloc(neuron_count * sizeof(data_t*));
 	this->neurons.wgrads = (grad_t**)malloc(neuron_count * sizeof(grad_t*));
@@ -100,21 +101,21 @@ static void ST_CreateNetwork(ST_Network *this, size_t input_count, size_t *layer
 
 	for (int i = 0; i < layer_count; ++i)
 	{
-		this->layers[i].first_neuron = i ? this->layers[i - 1].first_neuron + this->layers[i - 1].wcount : 0;
+		this->layers[i].first_neuron = i ? this->layers[i - 1].first_neuron + this->layers[i - 1].nwcount : 0;
 		
 		for (int j = 0; j < this->layers[i].size; ++j)
 		{
 			this->neurons.weights[this->layers[i].first_neuron + j] = walloc;
 			this->neurons.wgrads[this->layers[i].first_neuron + j] = galloc;
 
-			walloc += this->layers[i].wcount;
-			galloc += this->layers[i].wcount;
+			walloc += this->layers[i].nwcount;
+			galloc += this->layers[i].nwcount;
 		}
 	}
 
 	for (int i = 0; i < layer_count; ++i)
 	{
-		printf("Layer %d: First neuron: %d, Wcount for each neuron: %ld\n", i, this->layers[i].first_neuron, this->layers[i].wcount);
+		printf("Layer %d: First neuron: %d, Wcount for each neuron: %ld\n", i, this->layers[i].first_neuron, this->layers[i].nwcount);
 	}
 }
 
@@ -127,7 +128,8 @@ static data_t *ST_ForwardPass(ST_Network *this, data_t *input)
 		for (int n = 0; n < this->layers[l].size; ++n)
 		{
 			Neuron neu = this->layers[l].first_neuron + n;
-			outs[n] = ST_ProcessNeuron(this->neurons.weights[neu], input, this->neurons.bias[neu], this->layers[l].wcount);
+			outs[n] = ST_ProcessNeuron(this->neurons.weights[neu], input, this->neurons.bias[neu], this->layers[l].nwcount);
+			memcpy(this->neurons.wgrads[neu], input, this->layers[l].nwcount * sizeof(data_t));
 		}
 		free(input);
 		input = outs;
@@ -136,20 +138,27 @@ static data_t *ST_ForwardPass(ST_Network *this, data_t *input)
 	return outs;
 }
 
-static data_t Loss(data_t *res, data_t *pred, data_t *g, int count)
+static void ST_BackwardPass(ST_Network *this, data_t *g, int count)
+{
+	for (int i = this->layer_count - 1; i >= 0; --i)
+	{
+		for (int n = 0; i < this->layers[i].size; ++n)
+		{
+			for (int w = 0; w < this->neurons.wcount[this->layers[i].first_neuron + n]; ++w)
+			{
+				this->neurons.wgrads[this->layers[i].first_neuron + n][w] *= g[i];
+			}
+		}
+	}
+}
+
+static data_t ST_Loss(data_t *res, data_t *pred, data_t *g, int count)
 {
 	data_t loss = 0.0f;
 	for (int i = 0; i < count; ++i)
 	{
 		loss += pow(res[i] - pred[i], 2.0); // nonsense using powf and let data_t be redefined
-		g[i] = (-pred[i]) * 2.0f;
+		g[i] = (res[i] - pred[i]) * 2.0f;
 	}
 	return loss;
-}
-
-static data_t BackwardLoss(data_t loss)
-{
-(exp * pow(v[c[x << 1]], exp - 1.0)) * g[x];
-	data_t a;
-	return 2 * pow(a)
 }
