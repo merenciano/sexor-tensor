@@ -18,6 +18,7 @@ public:
 		OP_NEURON,
 		OP_SIGMOID,
 		OP_SOFTMAX_LOSS, 
+		OP_LOSS,
 		OP_INPUT,
 	};
 
@@ -31,6 +32,16 @@ public:
 	Value(fp_t val, Neuron *neu, std::vector<Value*> in, Operation op) : _value(val), _neuron(neu), _in(in), _op(op) {}
 	Value(const Value&) = delete;
 
+	Value(Value &&other)
+	{
+		_neuron = other._neuron;
+		other._neuron = nullptr;
+		_in.swap(other._in);
+		_value = other._value;
+		_grad = other._grad;
+		_op = other._op;
+	}
+
 	void Backward();
 
 	Value &Sigmoid()
@@ -42,12 +53,15 @@ public:
 	{
 		return _value * x;
 	}
-	Neuron *_neuron; //TODO: Layer?
-	std::vector<Value*> _in;
+
 	fp_t _value;
 	fp_t _grad;
+	Neuron *_neuron; //TODO: Layer?
+	std::vector<Value*> _in;
 	Operation _op;
 };
+
+std::deque<Value> Value::graph;
 
 class Neuron
 {
@@ -58,13 +72,21 @@ public:
 	{
 		_weights.reserve(weights_count);
 		_grads.resize(weights_count, 0.0f);
-		_bias = std::rand() / (RAND_MAX / 2.0f) - 1.0f;
+		_bias = std::rand() / ((fp_t)RAND_MAX / 2.0f) - 1.0f;
 		_bgrad = 0.0f;
 
 		for (int i = 0; i < weights_count; ++i)
 		{
-			_weights.emplace_back(std::rand() / (RAND_MAX / 2.0f) - 1.0f);
+			_weights.emplace_back(std::rand() / ((fp_t)RAND_MAX / 2.0f) - 1.0f);
 		}
+	}
+
+	Neuron(Neuron&& other)
+	{
+		_weights.swap(other._weights);
+		_grads.swap(other._grads);
+		_bias = other._bias;
+		_bgrad = other._bgrad;
 	}
 
 	Value* operator()(const std::vector<Value*>& input)
@@ -74,7 +96,7 @@ public:
 		{
 			v += (*(input[i]) * _weights[i]) + _bias;
 		}
-		return &Value::graph.emplace_back(v, this, &input, Value::OP_NEURON);
+		return &Value::graph.emplace_back(v, this, input, Value::OP_NEURON);
 	}
 
 	void Optimize(fp_t step)
@@ -113,6 +135,11 @@ public:
 		}
 	}
 
+	Layer(Layer&& other)
+	{
+		_neurons.swap(other._neurons);
+	}
+
 	std::vector<Value*> Process(const std::vector<Value*>& in)
 	{
 		std::vector<Value*> ret;
@@ -141,6 +168,11 @@ public:
 		}
 	}
 
+	Network(Network &&other)
+	{
+		_layers.swap(other._layers);
+	}
+
 	std::vector<Value*> Process(const std::vector<Value*>& in)
 	{
 		std::vector<Value*> out = in;
@@ -167,37 +199,57 @@ public:
 	std::vector<Layer> _layers;
 };
 
-Value &SoftmaxLoss(const std::vector<Value*>& score, const std::vector<fp_t> pred)
+Value &SoftmaxLoss(const std::vector<std::vector<Value*>>& score, const std::vector<std::vector<fp_t>> pred)
 {
-	auto &ret = Value::graph.emplace_back(0.0f, nullptr, score, Value::OP_SOFTMAX_LOSS);
-	fp_t sum = 0.0f;
-	for (int i = 0; i < score.size(); ++i)
+	std::vector<Value*> rets;
+	int batch_size = score.size();
+	for (int batch = 0; batch < batch_size; ++batch)
 	{
-		sum += exp(score[i]->_value);
+		auto ret = rets.emplace_back(&Value::graph.emplace_back(0.0f, nullptr, score[batch], Value::OP_SOFTMAX_LOSS));
+		ret->_grad = (1.0f / batch_size) * -1.0f;
+		fp_t sum = 0.0f;
+		for (int i = 0; i < score[batch].size(); ++i)
+		{
+			sum += exp(score[batch][i]->_value);
+		}
+		
+		for (int i = 0; i < pred[batch].size(); ++i)
+		{
+			auto softmax = exp(score[batch][i]->_value) / sum;
+			if (pred[batch][i])
+			{
+				ret->_value = -log(softmax);
+				ret->_in[i]->_grad += (softmax - 1.0f) * ret->_grad;
+			}
+			else
+			{
+				//ret->_in[i]->_grad = softmax * ret->_grad;
+			}
+		}
 	}
-	
+
+	fp_t sum = 0.0f;
+	for (int i = 0; i < rets.size(); ++i)
+	{
+		sum += rets[i]->_value;
+	}
+	auto& ret = Value::graph.emplace_back(sum / batch_size, nullptr, rets, Value::OP_SOFTMAX_LOSS);
+	ret._grad = 1.0f;
+	printf("\nLoss: %lf\n", ret._value);
+	return ret;
+}
+
+Value &Loss(const std::vector<Value*>& score, const std::vector<fp_t> pred)
+{
+	auto &ret = Value::graph.emplace_back(0.0f, nullptr, score, Value::OP_LOSS);
 	for (int i = 0; i < pred.size(); ++i)
 	{
-		auto softmax = exp(score[i]->_value) / sum;
-		if (pred[i])
+		if (pred[i] != 0.0f)
 		{
-			ret._value = -log(softmax);
-			ret._in[i]->_grad = softmax - 1.0f;
-		}
-		else
-		{
-			ret._in[i]->_grad = softmax;
+			ret._value = -log(score[i]->_value);
+			return ret;
 		}
 	}
-
-	printf("Score: ");
-	for (auto s : score)
-	{
-		printf("%f ,", s->_value);
-	}
-	printf("\nLoss: %lf\n", ret._value);
-
-	ret._grad = 1.0f;
 	return ret;
 }
 
@@ -218,7 +270,7 @@ void Value::Backward()
 
 		case OP_SIGMOID:
 		{
-			_grad += _value * (1.0f - _value);
+			_in[0]->_grad += _value * (1.0f - _value) * _grad;
 			break;
 		}
 
@@ -227,6 +279,8 @@ void Value::Backward()
 			// Ya he puesto los valores en SoftMax.
 			break;
 		}
+
+		default: break;
 	}
 }
 
@@ -248,30 +302,82 @@ void Topo(Value *value, std::set<Value*> &visited, std::vector<Value*> &out)
 
 int main()
 {
-	Network net({28*28, 56, 10});
+	//Network net({28*28, 56, 10});
+	Network net({3, 3, 3});
 
-	std::vector<Value*> inputs;
-	for (int i = 0; i < 28*28; ++i)
-	{
-		inputs.emplace_back(new Value(1.0f));
-	}
+	std::vector<std::vector<Value*>> inputs(5);
+	inputs[0].emplace_back(new Value(0.7f));
+	inputs[0].emplace_back(new Value(0.3f));
+	inputs[0].emplace_back(new Value(0.2f));
 
-	std::vector<fp_t> pred(10, 0.0f);
-	pred[4] = 1.0f;
+	inputs[1].emplace_back(new Value(0.1f));
+	inputs[1].emplace_back(new Value(0.6f));
+	inputs[1].emplace_back(new Value(0.2f));
+
+	inputs[2].emplace_back(new Value(0.6f));
+	inputs[2].emplace_back(new Value(0.9f));
+	inputs[2].emplace_back(new Value(0.5f));
+
+	inputs[3].emplace_back(new Value(0.0f));
+	inputs[3].emplace_back(new Value(0.1f));
+	inputs[3].emplace_back(new Value(0.3f));
+
+	inputs[4].emplace_back(new Value(0.3f));
+	inputs[4].emplace_back(new Value(0.3f));
+	inputs[4].emplace_back(new Value(0.4f));
+
+	std::vector<std::vector<fp_t>> pred(5);
+	pred[0].emplace_back(1.0f);
+	pred[0].emplace_back(0.0f);
+	pred[0].emplace_back(0.0f);
+
+	pred[1].emplace_back(0.0f);
+	pred[1].emplace_back(1.0f);
+	pred[1].emplace_back(0.0f);
+
+	pred[2].emplace_back(0.0f);
+	pred[2].emplace_back(1.0f);
+	pred[2].emplace_back(0.0f);
+
+	pred[3].emplace_back(0.0f);
+	pred[3].emplace_back(0.0f);
+	pred[3].emplace_back(1.0f);
+
+	pred[4].emplace_back(0.0f);
+	pred[4].emplace_back(0.0f);
+	pred[4].emplace_back(1.0f);
 
 	for (int i = 0; i < 50; ++i)
 	{
-		auto out = net.Process(inputs);
-		auto &f = SoftmaxLoss(out, pred);
-		std::set<Value*> vis;
-		std::vector<Value*> topo;
-		Topo(&f, vis, topo);
-		for (auto& val : topo)
+		std::vector<std::vector<Value*>> outs;
+		for (int batch = 0; batch < inputs.size(); ++batch)
 		{
-			val->Backward();
+			outs.emplace_back(net.Process(inputs[batch]));
+		}
+
+		SoftmaxLoss(outs, pred);
+		for (auto it = Value::graph.rbegin(); it != Value::graph.rend(); ++it)
+		{
+			it->Backward();
 		}
 		net.Optimize(0.3f);
 	}
+
+	auto out = net.Process({new Value(0.9f) , new Value(0.3f), new Value(0.5f)});
+	printf("Esperado: %d, %d, %d. Resultado: %f, %f, %f.\n", 1, 0, 0, out[0]->_value, out[1]->_value, out[2]->_value);
+	Value::graph.clear();
+
+	out = net.Process({new Value(0.1f) , new Value(0.2f), new Value(0.3f)});
+	printf("Esperado: %d, %d, %d. Resultado: %f, %f, %f.\n", 0, 0, 1, out[0]->_value, out[1]->_value, out[2]->_value);
+	Value::graph.clear();
+
+	out = net.Process({new Value(0.7f) , new Value(0.8f), new Value(0.3f)});
+	printf("Esperado: %d, %d, %d. Resultado: %f, %f, %f.\n", 0, 1, 0, out[0]->_value, out[1]->_value, out[2]->_value);
+	Value::graph.clear();
+
+	out = net.Process({new Value(0.5f) , new Value(0.2f), new Value(0.3f)});
+	printf("Esperado: %d, %d, %d. Resultado: %f, %f, %f.\n", 1, 0, 0, out[0]->_value, out[1]->_value, out[2]->_value);
+	Value::graph.clear();
 
 	return 0; 
 }
